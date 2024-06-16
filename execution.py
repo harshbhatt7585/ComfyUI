@@ -11,6 +11,8 @@ import torch
 import nodes
 
 import comfy.model_management
+from concurrent.futures import ThreadPoolExecutor
+import concurrent
 
 def get_input_data(inputs, class_def, unique_id, outputs={}, prompt={}, extra_data={}):
     valid_inputs = class_def.INPUT_TYPES()
@@ -193,6 +195,7 @@ def recursive_execute(server, prompt, outputs, current_item, extra_data, execute
 
     return (True, None, None)
 
+
 def recursive_will_execute(prompt, outputs, current_item, memo={}):
     unique_id = current_item
 
@@ -204,16 +207,22 @@ def recursive_will_execute(prompt, outputs, current_item, memo={}):
     if unique_id in outputs:
         return []
 
-    for x in inputs:
-        input_data = inputs[x]
-        if isinstance(input_data, list):
-            input_unique_id = input_data[0]
-            output_index = input_data[1]
-            if input_unique_id not in outputs:
-                will_execute += recursive_will_execute(prompt, outputs, input_unique_id, memo)
+    futures = []
+    with ThreadPoolExecutor() as executor:
+        for x in inputs:
+            input_data = inputs[x]
+            if isinstance(input_data, list):
+                input_unique_id = input_data[0]
+                output_index = input_data[1]  # Not used in this snippet
+                if input_unique_id not in outputs:
+                    
+                    futures.append(executor.submit(recursive_will_execute, prompt, outputs, input_unique_id, memo))
 
-    memo[unique_id] = will_execute + [unique_id]
-    return memo[unique_id]
+        for future in concurrent.futures.as_completed(futures):
+            will_execute += future.result()
+
+    memo[unique_id] = will_execute
+    return will_execute
 
 def recursive_output_delete_if_changed(prompt, old_prompt, outputs, current_item):
     unique_id = current_item
@@ -334,7 +343,7 @@ class PromptExecutor:
             self.server.client_id = extra_data["client_id"]
         else:
             self.server.client_id = None
-
+    
         self.status_messages = []
         self.add_message("execution_start", { "prompt_id": prompt_id}, broadcast=False)
 
